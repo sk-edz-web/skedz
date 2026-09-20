@@ -1,14 +1,32 @@
 import express, { Request, Response, NextFunction } from "express";
 import path from "path";
 import fs from "fs";
-import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 
 dotenv.config();
 
 const app = express();
 const PORT = 3000;
-const DATA_FILE = path.join(process.cwd(), "portal-data.json");
+const isVercel = Boolean(process.env.VERCEL);
+
+function getDataFilePath(): string {
+  if (isVercel) {
+    const tmpFile = path.join("/tmp", "portal-data.json");
+    if (!fs.existsSync(tmpFile)) {
+      const rootFile = path.join(process.cwd(), "portal-data.json");
+      if (fs.existsSync(rootFile)) {
+        try {
+          fs.copyFileSync(rootFile, tmpFile);
+        } catch (err) {
+          console.error("Failed to copy initial data to /tmp:", err);
+        }
+      }
+    }
+    return tmpFile;
+  }
+  return path.join(process.cwd(), "portal-data.json");
+}
+
 const IMGBB_API_KEY = process.env.IMGBB_API_KEY || "d52834a6dd5b38108a1abaf081dec54d";
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "skedz5023";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "sarathi";
@@ -18,9 +36,16 @@ app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 // Local media uploads directory
-const UPLOADS_DIR = path.join(process.cwd(), "public", "uploads");
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+const UPLOADS_DIR = isVercel
+  ? path.join("/tmp", "uploads")
+  : path.join(process.cwd(), "public", "uploads");
+
+try {
+  if (!fs.existsSync(UPLOADS_DIR)) {
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  }
+} catch {
+  // directory creation fallback
 }
 app.use("/uploads", express.static(UPLOADS_DIR));
 
@@ -105,9 +130,11 @@ interface DatabaseSchema {
     apiKey: string;
     authDomain: string;
     projectId: string;
+    databaseURL?: string;
     storageBucket?: string;
     messagingSenderId?: string;
     appId?: string;
+    measurementId?: string;
   } | null;
   lastUpdated: number;
 }
@@ -165,26 +192,34 @@ const defaultInitialData: DatabaseSchema = {
   lastUpdated: Date.now(),
 };
 
+let memoryDbCache: DatabaseSchema | null = null;
+
 function readDatabase(): DatabaseSchema {
+  const filePath = getDataFilePath();
   try {
-    if (fs.existsSync(DATA_FILE)) {
-      const raw = fs.readFileSync(DATA_FILE, "utf-8");
+    if (fs.existsSync(filePath)) {
+      const raw = fs.readFileSync(filePath, "utf-8");
       const parsed = JSON.parse(raw);
       if (!parsed.reviews) parsed.reviews = [];
+      memoryDbCache = parsed;
       return parsed;
     }
   } catch (err) {
     console.error("Error reading database file, using fallback:", err);
   }
+  if (memoryDbCache) return memoryDbCache;
   // Initialize with defaults if missing
   writeDatabase(defaultInitialData);
+  memoryDbCache = defaultInitialData;
   return defaultInitialData;
 }
 
 function writeDatabase(data: DatabaseSchema) {
+  memoryDbCache = data;
+  const filePath = getDataFilePath();
   try {
     data.lastUpdated = Date.now();
-    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), "utf-8");
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
   } catch (err) {
     console.error("Error writing database file:", err);
   }
@@ -1057,7 +1092,7 @@ app.post("/api/sites/upload-file", requireAdmin, (req, res) => {
 
 // Admin Save/Update Firebase Configuration
 app.post("/api/admin/firebase-config", requireAdmin, (req, res) => {
-  const { apiKey, authDomain, projectId, storageBucket, messagingSenderId, appId } = req.body;
+  const { apiKey, authDomain, projectId, databaseURL, storageBucket, messagingSenderId, appId, measurementId } = req.body;
   if (!apiKey || !authDomain || !projectId) {
     res.status(400).json({ error: "apiKey, authDomain, and projectId are required for Firebase setup" });
     return;
@@ -1068,13 +1103,15 @@ app.post("/api/admin/firebase-config", requireAdmin, (req, res) => {
     apiKey: String(apiKey).trim(),
     authDomain: String(authDomain).trim(),
     projectId: String(projectId).trim(),
+    databaseURL: databaseURL ? String(databaseURL).trim() : `https://${String(projectId).trim()}-default-rtdb.firebaseio.com`,
     storageBucket: storageBucket ? String(storageBucket).trim() : "",
     messagingSenderId: messagingSenderId ? String(messagingSenderId).trim() : "",
     appId: appId ? String(appId).trim() : "",
+    measurementId: measurementId ? String(measurementId).trim() : "",
   };
 
   writeDatabase(db);
-  broadcastUpdate("firebase_config_updated", { configured: true, projectId: db.firebaseConfig.projectId });
+  broadcastUpdate("firebase_config_updated", { configured: true, projectId: db.firebaseConfig?.projectId });
   res.json({ success: true, message: "Firebase credentials stored securely in portal" });
 });
 
@@ -1167,6 +1204,7 @@ app.get("/raw-site/:slug", (req, res) => {
 // --- VITE MIDDLEWARE (DEV) & STATIC (PROD) ---
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -1188,4 +1226,10 @@ async function startServer() {
   });
 }
 
-startServer();
+// Start listener in local/container environments; on Vercel, serverless invokes app directly
+if (!isVercel) {
+  startServer();
+}
+
+export { app };
+export default app;

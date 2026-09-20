@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "framework": "vite",
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api"
+    },
+    {
+      "source": "/admin",
+      "destination": "/admin.html"
+    },
+    {
+      "source": "/admin.html",
+      "destination": "/admin.html"
+    },
+    {
+      "source": "/portal-data.json",
+      "destination": "/portal-data.json"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
+  ]
+}

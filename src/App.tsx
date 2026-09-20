@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { ProjectCard, SocialLink, DynamicSite, FirebaseConfig } from "./types";
+import { initFirebase, DEFAULT_FIREBASE_CONFIG } from "./lib/firebase";
 import GalaxyCanvas from "./components/GalaxyCanvas";
 import CustomCursor from "./components/CustomCursor";
 import IntroScreen from "./components/IntroScreen";
@@ -58,13 +59,45 @@ export default function App() {
 
     async function loadData() {
       try {
-        const res = await fetch("/api/portal/data");
-        if (res.ok) {
-          const data = await res.json();
+        let data: any = null;
+        try {
+          const res = await fetch("/api/portal/data");
+          const contentType = res.headers.get("content-type") || "";
+          if (res.ok && contentType.includes("application/json")) {
+            data = await res.json();
+          }
+        } catch {
+          data = null;
+        }
+
+        // Static host fallback (e.g. Vercel static deployment)
+        if (!data) {
+          try {
+            const fallbackRes = await fetch("/portal-data.json");
+            if (fallbackRes.ok) {
+              data = await fallbackRes.json();
+            }
+          } catch (e) {
+            console.warn("Could not load /portal-data.json fallback:", e);
+          }
+        }
+
+        // Check local storage overrides (from admin in static mode)
+        try {
+          const localOverride = localStorage.getItem("skedz_portal_data_override");
+          if (localOverride) {
+            const parsed = JSON.parse(localOverride);
+            data = { ...(data || {}), ...parsed };
+          }
+        } catch {}
+
+        if (data) {
           setCards(data.cards || []);
           setSocials(data.socials || []);
           setSites(data.sites || []);
-          setFirebaseConfig(data.firebaseConfig || null);
+          const activeFb = data.firebaseConfig || DEFAULT_FIREBASE_CONFIG;
+          setFirebaseConfig(activeFb);
+          initFirebase(activeFb);
         }
       } catch (err) {
         console.error("Error fetching portal data:", err);
@@ -74,6 +107,11 @@ export default function App() {
     }
 
     loadData();
+
+    const handleDataChange = () => {
+      loadData();
+    };
+    window.addEventListener("skedz_portal_data_changed", handleDataChange);
 
     // Setup SSE for real-time live sync
     try {
@@ -105,6 +143,7 @@ export default function App() {
     }
 
     return () => {
+      window.removeEventListener("skedz_portal_data_changed", handleDataChange);
       if (sse) sse.close();
     };
   }, []);
@@ -379,6 +418,7 @@ export default function App() {
                       window.scrollTo({ top: 0, behavior: "smooth" });
                     }}
                     projectCount={cards.length}
+                    firebaseConfig={firebaseConfig}
                   />
                 </motion.div>
               )}

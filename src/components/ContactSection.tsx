@@ -33,34 +33,41 @@ export default function ContactSection({ initialSubject = "", firebaseConfig }: 
 
     try {
       let fbSuccess = false;
-      // 1. If user provided their Firebase credentials, save directly to Firestore
-      if (firebaseConfig && firebaseConfig.apiKey && firebaseConfig.projectId) {
-        try {
-          await saveContactMessageToFirestore(firebaseConfig, { name, email, phone, message });
-          fbSuccess = true;
-          setSavedToFirebase(true);
-        } catch (fbErr: any) {
-          console.warn("Direct Firebase write error:", fbErr);
-        }
+      // 1. Save directly to Firebase Firestore
+      try {
+        await saveContactMessageToFirestore(firebaseConfig, { name, email, phone, message });
+        fbSuccess = true;
+        setSavedToFirebase(true);
+      } catch (fbErr: any) {
+        console.warn("Direct Firebase write note:", fbErr);
       }
 
-      // 2. Also register in local real-time server database
-      const res = await fetch("/api/contact", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email, phone, message }),
-      });
+      // 2. Also register in real-time server database if available
+      try {
+        const res = await fetch("/api/contact", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, email, phone, message }),
+        });
 
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to deliver message");
+        let data: any = null;
+        const contentType = res.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) {
+          data = await res.json();
+        }
+
+        if (!res.ok && !fbSuccess) {
+          throw new Error(data?.error || "Failed to deliver message via server.");
+        }
+      } catch (fetchErr: any) {
+        if (!fbSuccess) {
+          throw fetchErr;
+        }
       }
 
       setStatus("success");
       if (fbSuccess) {
-        setStatusMessage("Your direct message has been saved to your Firebase Firestore & transmitted to SKEDZ!");
-      } else if (!firebaseConfig || !firebaseConfig.projectId) {
-        setStatusMessage("Your message has been delivered to SKEDZ! (Awaiting your Firebase API config for Firestore direct cloud sync).");
+        setStatusMessage("Your direct message has been saved to Firebase Firestore & transmitted to SKEDZ!");
       } else {
         setStatusMessage("Your message has been delivered to SKEDZ!");
       }
