@@ -52,6 +52,91 @@ app.use("/uploads", express.static(UPLOADS_DIR));
 // Server-Sent Events subscribers for real-time updates
 const sseClients: Set<Response> = new Set();
 
+// Helper: Extract subdomain slug for dynamic sites
+// e.g. "newpage.skedz.vercel.app" -> "newpage"
+// e.g. "newpage.skedz.com" -> "newpage"
+// e.g. "newpage.localhost:3000" -> "newpage"
+function extractSubdomainFromHost(rawHost: string = ""): string | null {
+  if (!rawHost) return null;
+  const host = rawHost.toLowerCase().split(":")[0].trim();
+
+  // If host is IP address, ignore
+  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(host) || host.includes("[")) {
+    return null;
+  }
+
+  const rootDomains = [
+    "skedz.vercel.app",
+    "skedz-main.vercel.app",
+    "skedz-portal.vercel.app",
+    "skedz.dev",
+    "skedz.com",
+    "localhost",
+  ];
+
+  for (const root of rootDomains) {
+    if (host.endsWith("." + root)) {
+      const sub = host.slice(0, -(root.length + 1)).trim();
+      if (sub && !["www", "app", "portal", "api", "admin"].includes(sub)) {
+        return sub.split(".")[0];
+      }
+    }
+  }
+
+  // Generic check for *.domain.ext
+  const parts = host.split(".");
+  if (host.endsWith(".vercel.app") && parts.length === 4) {
+    const sub = parts[0];
+    if (sub && !["www", "app", "portal", "api", "admin"].includes(sub)) {
+      return sub;
+    }
+  } else if (!host.endsWith(".vercel.app") && parts.length >= 3) {
+    const sub = parts[0];
+    if (sub && !["www", "app", "portal", "api", "admin"].includes(sub)) {
+      return sub;
+    }
+  }
+
+  return null;
+}
+
+// Subdomain Routing Middleware: if request is on subdomain e.g. newpage.skedz.vercel.app
+// serve the dynamic site directly for root path "/" or "/index.html"
+app.use((req, res, next) => {
+  // Never intercept API routes or uploads
+  if (req.path.startsWith("/api") || req.path.startsWith("/uploads")) {
+    return next();
+  }
+
+  const host = (req.headers["x-forwarded-host"] as string) || req.headers.host || "";
+  const subSlug = extractSubdomainFromHost(host);
+
+  if (subSlug && (req.path === "/" || req.path === "/index.html" || req.path === "")) {
+    const db = readDatabase();
+    const site = db.sites.find((s) => s.slug.toLowerCase() === subSlug.toLowerCase());
+    if (site) {
+      if (site.customHtml) {
+        let fullHtml = site.customHtml;
+        if (site.customCss) {
+          fullHtml = fullHtml.replace("</head>", `<style>${site.customCss}</style></head>`);
+        }
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.send(fullHtml);
+        return;
+      }
+      if (site.externalUrl) {
+        res.redirect(site.externalUrl);
+        return;
+      }
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.send(`<!DOCTYPE html><html><head><title>${site.title}</title><meta name="viewport" content="width=device-width, initial-scale=1"></head><body style="font-family:sans-serif;padding:2rem;background:#030712;color:#f8fafc;"><h1>${site.title}</h1><p>${site.description}</p></body></html>`);
+      return;
+    }
+  }
+
+  next();
+});
+
 function broadcastUpdate(type: string, payload: any) {
   const message = `event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`;
   for (const client of sseClients) {
@@ -1199,6 +1284,23 @@ app.get("/raw-site/:slug", (req, res) => {
   }
 
   res.send(`<h1>${site.title}</h1><p>${site.description}</p>`);
+});
+
+// JSON 404 for unhandled API endpoints so clients never receive an HTML error page
+app.all("/api/*", (_req, res) => {
+  res.status(404).json({ error: "API route not found" });
+});
+
+// Express global error handler ensuring JSON responses for all /api requests
+app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+  console.error("Global Server Error:", err);
+  if (req.path.startsWith("/api")) {
+    res.status(err.status || err.statusCode || 500).json({
+      error: err.message || "An unexpected server error occurred",
+    });
+    return;
+  }
+  next(err);
 });
 
 // --- VITE MIDDLEWARE (DEV) & STATIC (PROD) ---

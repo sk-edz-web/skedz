@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { getSiteSubdomainUrl } from "../../lib/domain";
 import {
   ProjectCard,
   SocialLink,
@@ -310,8 +311,9 @@ export default function AdminDashboard({ onExitAdmin }: AdminDashboardProps) {
         setToken(null);
         setAuthError("Session expired. Please sign in again.");
       } else {
-        const data = await res.json();
-        alert(data.error || "Failed to save API key");
+        const ct = res.headers.get("content-type") || "";
+        const data = ct.includes("application/json") ? await res.json() : null;
+        alert(data?.error || `Failed to save API key (HTTP ${res.status})`);
       }
     } catch (err: any) {
       alert(err.message || "Failed to save API key");
@@ -339,8 +341,9 @@ export default function AdminDashboard({ onExitAdmin }: AdminDashboardProps) {
         },
         body: JSON.stringify({ apiKey: customImgbbKey }),
       });
-      const data = await res.json();
-      if (res.ok && data.success) {
+      const ct = res.headers.get("content-type") || "";
+      const data = ct.includes("application/json") ? await res.json() : null;
+      if (res.ok && data?.success) {
         setImgbbTestResult({
           success: true,
           message: "✓ ImgBB API Key is valid and active!",
@@ -348,7 +351,7 @@ export default function AdminDashboard({ onExitAdmin }: AdminDashboardProps) {
       } else {
         setImgbbTestResult({
           success: false,
-          message: data.error || "ImgBB rejected this key. Please verify key at api.imgbb.com.",
+          message: data?.error || `ImgBB test failed (HTTP ${res.status}). Please check your API key at api.imgbb.com.`,
         });
       }
     } catch (err: any) {
@@ -503,13 +506,21 @@ export default function AdminDashboard({ onExitAdmin }: AdminDashboardProps) {
           return;
         }
 
-        const data = await res.json();
-        if (res.ok && (data.url || data.displayUrl)) {
+        let data: any = null;
+        const contentType = res.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) {
+          data = await res.json();
+        } else {
+          const text = await res.text();
+          console.warn("Non-JSON response from upload server:", text.slice(0, 100));
+        }
+
+        if (res.ok && data && (data.url || data.displayUrl)) {
           const finalUrl = data.url || data.displayUrl;
           uploadedUrls.push(finalUrl);
           if (data.provider === "imgbb") providerUsed = "imgbb";
         } else {
-          console.error("Upload error:", data.error);
+          console.error("Upload error:", data?.error || `Upload failed with HTTP ${res.status}`);
         }
       } catch (err: any) {
         console.error("Error uploading file:", err);
@@ -1395,7 +1406,7 @@ export default function AdminDashboard({ onExitAdmin }: AdminDashboardProps) {
               <div>
                 <h2 className="text-xl font-bold text-white">Upload & Deploy Dynamic Sub-Sites</h2>
                 <p className="text-xs text-slate-400">
-                  Upload your pre-coded HTML/web files to host them instantly under custom sub-routes like <span className="font-mono text-cyan-300">skedz.domainname.com/slug</span>.
+                  Upload your pre-coded HTML/web files to host them instantly on custom subdomains like <span className="font-mono text-cyan-300">slug.skedz.vercel.app</span> or path <span className="font-mono text-cyan-300">/slug</span>.
                 </p>
               </div>
               <button
@@ -1444,22 +1455,36 @@ export default function AdminDashboard({ onExitAdmin }: AdminDashboardProps) {
                       <p className="text-xs text-slate-400 mb-4 font-light">{site.description}</p>
 
                       <div className="p-3 rounded-xl bg-black/40 border border-white/5 font-mono text-[11px] text-slate-400 space-y-1">
-                        <div>Route: <span className="text-cyan-300">/{site.slug}</span></div>
+                        <div>Subdomain: <span className="text-cyan-300 font-bold">{site.slug}.skedz.vercel.app</span></div>
+                        <div>Path Route: <span className="text-purple-300">/{site.slug}</span></div>
                         <div>File: {site.fileName || "Uploaded HTML Code"}</div>
                         {site.fileSize && <div>Size: {(site.fileSize / 1024).toFixed(1)} KB</div>}
                       </div>
                     </div>
 
-                    <div className="mt-6 pt-4 border-t border-white/5 flex items-center justify-between">
-                      <a
-                        href={`/${site.slug}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1.5 text-xs text-purple-300 hover:text-cyan-300 font-mono"
-                      >
-                        <ExternalLink className="w-3.5 h-3.5" />
-                        Preview Live
-                      </a>
+                    <div className="mt-6 pt-4 border-t border-white/5 flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-3">
+                        <a
+                          href={getSiteSubdomainUrl(site.slug)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1.5 text-xs text-cyan-300 hover:text-white font-mono font-semibold transition"
+                          title="Open Subdomain URL"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          {site.slug}.skedz.vercel.app
+                        </a>
+                        <span className="text-slate-600">|</span>
+                        <a
+                          href={`/${site.slug}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 text-xs text-purple-300 hover:text-white font-mono transition"
+                          title="Open Path URL"
+                        >
+                          /{site.slug}
+                        </a>
+                      </div>
 
                       <button
                         onClick={() => handleDeleteSite(site.id)}
@@ -2293,11 +2318,11 @@ export default function AdminDashboard({ onExitAdmin }: AdminDashboardProps) {
 
                         <div>
                           <label className="block text-[11px] font-mono text-purple-300 mb-1">
-                            Sub-Route Slug (will be live at this URL):
+                            Subdomain & Route (Live at {cardDeploySlug ? `${cardDeploySlug}.skedz.vercel.app` : "slug.skedz.vercel.app"}):
                           </label>
                           <div className="flex items-center">
-                            <span className="px-3 py-2 bg-white/5 border border-r-0 border-white/10 rounded-l-2xl text-slate-400 text-xs font-mono">
-                              /
+                            <span className="px-3 py-2 bg-white/5 border border-r-0 border-white/10 rounded-l-2xl text-cyan-400 text-xs font-mono">
+                              https://
                             </span>
                             <input
                               type="text"
@@ -2306,6 +2331,9 @@ export default function AdminDashboard({ onExitAdmin }: AdminDashboardProps) {
                               onChange={(e) => setCardDeploySlug(e.target.value)}
                               className="w-full px-3 py-2 rounded-r-2xl bg-white/[0.04] border border-white/10 text-xs text-white font-mono focus:border-purple-500 focus:outline-none"
                             />
+                            <span className="px-3 py-2 bg-white/5 border border-l-0 border-white/10 rounded-r-2xl text-slate-400 text-xs font-mono whitespace-nowrap">
+                              .skedz.vercel.app
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -2566,8 +2594,12 @@ export default function AdminDashboard({ onExitAdmin }: AdminDashboardProps) {
               Upload & Host Dynamic Sub-Site
             </h3>
             <p className="text-xs text-slate-400 mb-6">
-              Upload your code file. It will be hosted instantly at{" "}
+              Upload your code file. It will be hosted instantly on custom subdomain{" "}
               <span className="text-cyan-300 font-bold font-mono">
+                {siteSlug ? `${siteSlug}.skedz.vercel.app` : "slug.skedz.vercel.app"}
+              </span>{" "}
+              and route{" "}
+              <span className="text-purple-300 font-bold font-mono">
                 /{siteSlug || "slug"}
               </span>
               .
@@ -2648,10 +2680,10 @@ export default function AdminDashboard({ onExitAdmin }: AdminDashboardProps) {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-mono uppercase text-slate-300 mb-1">
-                    Route Slug * (e.g. portfolio)
+                    Route Slug / Subdomain * (e.g. portfolio)
                   </label>
                   <div className="flex items-center">
-                    <span className="px-3 py-2 bg-white/5 border border-r-0 border-white/10 rounded-l-xl text-slate-400 text-sm font-mono">
+                    <span className="px-3 py-2 bg-white/5 border border-r-0 border-white/10 rounded-l-xl text-slate-400 text-xs font-mono">
                       /
                     </span>
                     <input
@@ -2663,6 +2695,9 @@ export default function AdminDashboard({ onExitAdmin }: AdminDashboardProps) {
                       className="w-full px-3.5 py-2 rounded-r-xl bg-white/[0.04] border border-white/10 text-sm text-white font-mono focus:border-purple-500 focus:outline-none"
                     />
                   </div>
+                  <p className="text-[10px] font-mono text-cyan-300/80 mt-1">
+                    ↳ Will be available at: <span className="underline">{siteSlug ? `${siteSlug}.skedz.vercel.app` : "newsite.skedz.vercel.app"}</span>
+                  </p>
                 </div>
 
                 <div>

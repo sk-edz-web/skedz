@@ -19,6 +19,7 @@ import AdminDashboard from "./components/admin/AdminDashboard";
 import SkedzLogo from "./components/SkedzLogo";
 import ScrollReveal from "./components/ScrollReveal";
 import { updatePageSEO } from "./utils/seo";
+import { extractSubdomainSlug } from "./lib/domain";
 import { ArrowRight, Mail, MessageCircle, Instagram, Globe, ChevronDown } from "lucide-react";
 
 export default function App() {
@@ -176,13 +177,18 @@ export default function App() {
     normalizedPath === "/admin" ||
     normalizedPath === "/admin.html/";
 
+  // Check if hostname has a subdomain slug (e.g. newpage.skedz.vercel.app -> "newpage")
+  const subdomainSlug = typeof window !== "undefined" ? extractSubdomainSlug(window.location.hostname) : null;
+
   // Check if current path matches any dynamic sub-route (e.g. /newsite or /skedz)
-  const dynamicSlugMatch =
+  const pathSlugMatch =
     !isAdminPath &&
     normalizedPath !== "/" &&
     normalizedPath !== ""
       ? normalizedPath.replace(/^\//, "").split("/")[0]
       : null;
+
+  const dynamicSlugMatch = subdomainSlug || pathSlugMatch;
 
   // If Admin URL is visited
   if (isAdminPath) {
