@@ -65,8 +65,102 @@
       "order": 4
     }
   ],
-  "sites": [],
+  "sites": [
+    {
+      "id": "site-1789902919026",
+      "slug": "demo-fullstack",
+      "title": "Demo Fullstack Web",
+      "description": "Multi-file test with HTML, CSS, and JSON API",
+      "customHtml": "<!DOCTYPE html><html><head><title>Demo Fullstack App</title><link rel=\"stylesheet\" href=\"style.css\"></head><body style=\"background:#050814;color:#fff;font-family:sans-serif;padding:30px;\"><h1>Demo Fullstack Sub-site Live</h1><p>Running on SKEDZ Portal with multi-file support!</p><div id=\"api-data\">Loading api...</div><script src=\"app.js\"></script></body></html>",
+      "customCss": "h1 { color: #a855f7; } p { color: #94a3b8; }",
+      "files": [
+        {
+          "name": "index.html",
+          "path": "index.html",
+          "content": "<!DOCTYPE html><html><head><title>Demo Fullstack App</title><link rel=\"stylesheet\" href=\"style.css\"></head><body style=\"background:#050814;color:#fff;font-family:sans-serif;padding:30px;\"><h1>Demo Fullstack Sub-site Live</h1><p>Running on SKEDZ Portal with multi-file support!</p><div id=\"api-data\">Loading api...</div><script src=\"app.js\"></script></body></html>",
+          "contentType": "text/html",
+          "size": 363,
+          "isBinary": false
+        },
+        {
+          "name": "style.css",
+          "path": "style.css",
+          "content": "h1 { color: #a855f7; } p { color: #94a3b8; }",
+          "contentType": "text/css",
+          "size": 44,
+          "isBinary": false
+        },
+        {
+          "name": "app.js",
+          "path": "app.js",
+          "content": "fetch(\"/demo-fullstack/api/status.json\").then(r=>r.json()).then(d=>{document.getElementById(\"api-data\").innerText=\"API status: \"+d.status+\", users: \"+d.count;}).catch(e=>{document.getElementById(\"api-data\").innerText=\"API ready\";});",
+          "contentType": "application/javascript",
+          "size": 232,
+          "isBinary": false
+        },
+        {
+          "name": "status.json",
+          "path": "api/status.json",
+          "content": "{\"status\":\"healthy\",\"count\":42,\"framework\":\"SKEDZ-Core\"}",
+          "contentType": "application/json",
+          "size": 56,
+          "isBinary": false
+        }
+      ],
+      "entryFile": "index.html",
+      "projectType": "fullstack",
+      "fileName": "index.html",
+      "fileSize": 695,
+      "author": "skedz5023",
+      "createdAt": "2026-09-20T11:15:19.026Z",
+      "updatedAt": "2026-09-20T11:15:19.026Z"
+    }
+  ],
   "auditLogs": [
+    {
+      "id": "audit-1789902912119",
+      "ip": "127.0.0.1",
+      "device": "Unknown Browser on Unknown OS (Desktop)",
+      "userAgent": "curl/7.88.1",
+      "browser": "Unknown Browser",
+      "os": "Unknown OS",
+      "timestamp": "2026-09-20T11:15:12.119Z",
+      "status": "SUCCESS",
+      "usernameAttempted": "skedz5023"
+    },
+    {
+      "id": "audit-1789902901463",
+      "ip": "127.0.0.1",
+      "device": "Unknown Browser on Unknown OS (Desktop)",
+      "userAgent": "curl/7.88.1",
+      "browser": "Unknown Browser",
+      "os": "Unknown OS",
+      "timestamp": "2026-09-20T11:15:01.463Z",
+      "status": "FAILED",
+      "usernameAttempted": "skedz"
+    },
+    {
+      "id": "audit-1789902899229",
+      "ip": "127.0.0.1",
+      "device": "Unknown Browser on Unknown OS (Desktop)",
+      "userAgent": "curl/7.88.1",
+      "browser": "Unknown Browser",
+      "os": "Unknown OS",
+      "timestamp": "2026-09-20T11:14:59.229Z",
+      "status": "FAILED",
+      "usernameAttempted": "skedz"
+    },
+    {
+      "id": "audit-1789900477023",
+      "ip": "2405:201:e021:82ae:e56e:b073:e471:47bd",
+      "device": "Chrome on Windows (Desktop)",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+      "browser": "Chrome",
+      "os": "Windows",
+      "timestamp": "2026-09-20T10:34:37.023Z",
+      "status": "SUCCESS",
+      "usernameAttempted": "skedz5023"
+    },
     {
       "id": "audit-1789837622822",
       "ip": "2405:201:e021:82ae:89bd:d2ee:5801:4e18",
@@ -183,7 +277,7 @@
     "cloudName": "dntcjdw7r",
     "keyName": "upload"
   },
-  "lastUpdated": 1789899751117,
+  "lastUpdated": 1789902919026,
   "reviews": [],
   "adminSessions": {
     "skedz-adm-1789837622823-mx578qlc3tqfnx5wmkgflm": {
@@ -192,7 +286,23 @@
       "expiresAt": 1791047222823,
       "ip": "2405:201:e021:82ae:89bd:d2ee:5801:4e18",
       "device": "Chrome on Windows (Desktop)"
+    },
+    "skedz-adm-1789900477024-ukitzug9uhpzkli9olgdk": {
+      "username": "skedz5023",
+      "createdAt": 1789900477024,
+      "expiresAt": 1791110077024,
+      "ip": "2405:201:e021:82ae:e56e:b073:e471:47bd",
+      "device": "Chrome on Windows (Desktop)"
+    },
+    "skedz-adm-1789902912119-83kgrnpy67n01axy90xjild": {
+      "username": "skedz5023",
+      "createdAt": 1789902912120,
+      "expiresAt": 1791112512120,
+      "ip": "127.0.0.1",
+      "device": "Unknown Browser on Unknown OS (Desktop)"
     }
   },
-  "apiKeys": {}
+  "apiKeys": {
+    "imgbb": "d52834a6dd5b38108a1abaf081dec54d"
+  }
 }

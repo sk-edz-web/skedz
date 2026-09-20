@@ -7,6 +7,10 @@
       "destination": "/api"
     },
     {
+      "source": "/raw-site/(.*)",
+      "destination": "/api"
+    },
+    {
       "source": "/admin",
       "destination": "/admin.html"
     },
@@ -19,7 +23,7 @@
       "destination": "/portal-data.json"
     },
     {
-      "source": "/((?!api/).*)",
+      "source": "/((?!api/|raw-site/).*)",
       "destination": "/index.html"
     }
   ]

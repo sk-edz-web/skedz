@@ -1,7 +1,16 @@
-import express, { Request, Response, NextFunction } from "express";
+import express from "express";
+import type { Request, Response, NextFunction } from "express";
 import path from "path";
 import fs from "fs";
 import dotenv from "dotenv";
+import JSZip from "jszip";
+import {
+  getMimeType,
+  getFileLanguage,
+  renderMarkdownToHtml,
+  renderCodeViewerToHtml,
+  detectProjectType,
+} from "./src/lib/fileTypes.ts";
 
 dotenv.config();
 
@@ -100,10 +109,168 @@ function extractSubdomainFromHost(rawHost: string = ""): string | null {
   return null;
 }
 
+// --- MULTI-FILE SITE SERVING & FULLSTACK ROUTING ---
+function sendSiteFile(res: Response, file: any, site: any) {
+  const mime = file.contentType || getMimeType(file.path || file.name);
+
+  // Binary assets (images, fonts, audio, video, zip)
+  if (file.isBinary) {
+    try {
+      const buffer = Buffer.from(file.content, "base64");
+      res.setHeader("Content-Type", mime);
+      res.setHeader("Content-Length", buffer.length);
+      res.send(buffer);
+      return;
+    } catch (err) {
+      console.error("Failed to decode binary file:", err);
+    }
+  }
+
+  // Markdown rendering
+  if (file.name.toLowerCase().endsWith(".md") || file.name.toLowerCase().endsWith(".markdown")) {
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(renderMarkdownToHtml(file.content, site.title || file.name));
+    return;
+  }
+
+  // JSON API response
+  if (file.name.toLowerCase().endsWith(".json")) {
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.send(file.content);
+    return;
+  }
+
+  // Pure Code Viewer (Python, C++, SQL, Ruby, PHP, Go, Rust, Shell, etc.)
+  if (/\.(py|rb|php|sql|sh|bash|go|rs|c|cpp|java|kt|swift)$/i.test(file.name)) {
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(renderCodeViewerToHtml(file.content, file.name, getFileLanguage(file.name)));
+    return;
+  }
+
+  res.setHeader("Content-Type", mime);
+  res.send(file.content);
+}
+
+function handleSiteRequest(req: Request, res: Response, site: any, rawPath: string) {
+  const cleanPath = rawPath.replace(/^\/+/, "").trim();
+
+  // 1. Root or Entrypoint Request
+  if (!cleanPath || cleanPath === "index.html" || cleanPath === "index.htm") {
+    if (site.files && site.files.length > 0) {
+      let entry = null;
+      if (site.entryFile) {
+        entry = site.files.find((f: any) =>
+          f.path.toLowerCase() === site.entryFile.toLowerCase() ||
+          f.name.toLowerCase() === site.entryFile.toLowerCase()
+        );
+      }
+      if (!entry) {
+        entry = site.files.find((f: any) =>
+          f.path.toLowerCase() === "index.html" || f.name.toLowerCase() === "index.html"
+        );
+      }
+      if (!entry) {
+        entry = site.files.find((f: any) =>
+          f.path.toLowerCase() === "readme.md" || f.name.toLowerCase() === "readme.md"
+        );
+      }
+      if (!entry && site.files.length === 1) {
+        entry = site.files[0];
+      }
+
+      if (entry) {
+        sendSiteFile(res, entry, site);
+        return;
+      }
+    }
+
+    if (site.customHtml) {
+      let fullHtml = site.customHtml;
+      if (site.customCss) {
+        fullHtml = fullHtml.replace("</head>", `<style>${site.customCss}</style></head>`);
+      }
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.send(fullHtml);
+      return;
+    }
+
+    if (site.externalUrl) {
+      res.redirect(site.externalUrl);
+      return;
+    }
+
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(`<!DOCTYPE html><html><head><title>${site.title}</title><meta name="viewport" content="width=device-width, initial-scale=1"></head><body style="font-family:sans-serif;padding:2rem;background:#030712;color:#f8fafc;"><h1>${site.title}</h1><p>${site.description}</p></body></html>`);
+    return;
+  }
+
+  // 2. Sub-File / Resource Request (e.g. style.css, script.js, data.json, api/users.json)
+  if (site.files && site.files.length > 0) {
+    const target = cleanPath.toLowerCase();
+    const match = site.files.find((f: any) => {
+      const fPath = (f.path || f.name).toLowerCase().replace(/^\/+/, "");
+      const fName = (f.name || "").toLowerCase();
+      return fPath === target || fName === target || fPath.endsWith("/" + target);
+    });
+
+    if (match) {
+      sendSiteFile(res, match, site);
+      return;
+    }
+
+    // 3. Fullstack Mock API Handling:
+    // If request starts with "api/" or is a POST/PUT/DELETE
+    if (cleanPath.startsWith("api/") || req.method !== "GET") {
+      const jsonCandidate = site.files.find((f: any) =>
+        f.name.toLowerCase().endsWith(".json") &&
+        (cleanPath.toLowerCase().includes(f.name.toLowerCase().replace(".json", "")) || cleanPath.endsWith(".json"))
+      );
+      if (jsonCandidate && req.method === "GET") {
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.send(jsonCandidate.content);
+        return;
+      }
+
+      // Dynamic Mock API Response for fullstack app interactions
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.json({
+        success: true,
+        mock: true,
+        site: site.slug,
+        endpoint: "/" + cleanPath,
+        method: req.method,
+        received: req.body || null,
+        message: `Dynamic API endpoint /${cleanPath} executed successfully.`,
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+
+    // 4. SPA Client-Side Fallback:
+    // If path does not have an extension, fall back to index.html
+    if (!cleanPath.includes(".")) {
+      const spaIndex = site.files.find((f: any) =>
+        f.name.toLowerCase() === "index.html" || f.path.toLowerCase() === "index.html"
+      );
+      if (spaIndex) {
+        sendSiteFile(res, spaIndex, site);
+        return;
+      }
+      if (site.customHtml) {
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.send(site.customHtml);
+        return;
+      }
+    }
+  }
+
+  res.status(404).send(`<!DOCTYPE html><html><head><title>File Not Found</title></head><body style="font-family:monospace;padding:2rem;background:#030712;color:#f87171;"><h2>404: File Not Found</h2><p>The file <code>${cleanPath}</code> does not exist in <code>/${site.slug}</code>.</p></body></html>`);
+}
+
 // Subdomain Routing Middleware: if request is on subdomain e.g. newpage.skedz.vercel.app
-// serve the dynamic site directly for root path "/" or "/index.html"
+// handles all sub-site paths, assets, and APIs seamlessly
 app.use((req, res, next) => {
-  // Never intercept API routes or uploads
+  // Never intercept admin API routes or core uploads
   if (req.path.startsWith("/api") || req.path.startsWith("/uploads")) {
     return next();
   }
@@ -111,25 +278,11 @@ app.use((req, res, next) => {
   const host = (req.headers["x-forwarded-host"] as string) || req.headers.host || "";
   const subSlug = extractSubdomainFromHost(host);
 
-  if (subSlug && (req.path === "/" || req.path === "/index.html" || req.path === "")) {
+  if (subSlug) {
     const db = readDatabase();
     const site = db.sites.find((s) => s.slug.toLowerCase() === subSlug.toLowerCase());
     if (site) {
-      if (site.customHtml) {
-        let fullHtml = site.customHtml;
-        if (site.customCss) {
-          fullHtml = fullHtml.replace("</head>", `<style>${site.customCss}</style></head>`);
-        }
-        res.setHeader("Content-Type", "text/html; charset=utf-8");
-        res.send(fullHtml);
-        return;
-      }
-      if (site.externalUrl) {
-        res.redirect(site.externalUrl);
-        return;
-      }
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      res.send(`<!DOCTYPE html><html><head><title>${site.title}</title><meta name="viewport" content="width=device-width, initial-scale=1"></head><body style="font-family:sans-serif;padding:2rem;background:#030712;color:#f8fafc;"><h1>${site.title}</h1><p>${site.description}</p></body></html>`);
+      handleSiteRequest(req, res, site, req.path);
       return;
     }
   }
@@ -430,6 +583,16 @@ app.get("/api/portal/data", (_req, res) => {
       description: s.description,
       fileName: s.fileName,
       fileSize: s.fileSize,
+      fileCount: (s.files || []).length || (s.fileName ? 1 : 0),
+      projectType: s.projectType || (s.files && s.files.length > 0 ? detectProjectType(s.files) : "web"),
+      entryFile: s.entryFile || s.fileName || "index.html",
+      files: (s.files || []).map((f: any) => ({
+        name: f.name,
+        path: f.path,
+        size: f.size,
+        contentType: f.contentType,
+        isBinary: f.isBinary,
+      })),
       createdAt: s.createdAt,
     })),
     reviews: (db.reviews || []).map((r) => ({
@@ -1067,41 +1230,46 @@ app.delete("/api/cards/:id", requireAdmin, (req, res) => {
 
 // --- ADMIN CRUD: SITES (ADD SITE SECTION) ---
 app.post("/api/sites", requireAdmin, (req, res) => {
-  const { slug, title, description, customHtml, customCss, externalUrl } = req.body;
-  if (!slug || !title) {
-    res.status(400).json({ error: "Slug and title are required" });
-    return;
+  try {
+    const { slug, title, description, customHtml, customCss, externalUrl } = req.body;
+    if (!slug || !title) {
+      res.status(400).json({ error: "Slug and title are required" });
+      return;
+    }
+
+    // Clean slug
+    const cleanSlug = String(slug)
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9-_]/g, "");
+
+    const db = readDatabase();
+    if (db.sites.some((s) => s.slug.toLowerCase() === cleanSlug)) {
+      res.status(400).json({ error: `A site with slug '/${cleanSlug}' already exists.` });
+      return;
+    }
+
+    const newSite = {
+      id: `site-${Date.now()}`,
+      slug: cleanSlug,
+      title: String(title).trim(),
+      description: description ? String(description).trim() : "",
+      customHtml: customHtml || "",
+      customCss: customCss || "",
+      externalUrl: externalUrl ? String(externalUrl).trim() : "",
+      author: "skedz5023",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    db.sites.push(newSite);
+    writeDatabase(db);
+    broadcastUpdate("sites_updated", db.sites);
+    res.json({ success: true, site: newSite });
+  } catch (err: any) {
+    console.error("Error in POST /api/sites:", err);
+    res.status(500).json({ error: err.message || "Failed to save site configuration" });
   }
-
-  // Clean slug
-  const cleanSlug = String(slug)
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9-_]/g, "");
-
-  const db = readDatabase();
-  if (db.sites.some((s) => s.slug.toLowerCase() === cleanSlug)) {
-    res.status(400).json({ error: `A site with slug '/${cleanSlug}' already exists.` });
-    return;
-  }
-
-  const newSite = {
-    id: `site-${Date.now()}`,
-    slug: cleanSlug,
-    title: String(title).trim(),
-    description: description ? String(description).trim() : "",
-    customHtml: customHtml || "",
-    customCss: customCss || "",
-    externalUrl: externalUrl ? String(externalUrl).trim() : "",
-    author: "skedz5023",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
-
-  db.sites.push(newSite);
-  writeDatabase(db);
-  broadcastUpdate("sites_updated", db.sites);
-  res.json({ success: true, site: newSite });
 });
 
 app.put("/api/sites/:id", requireAdmin, (req, res) => {
@@ -1131,48 +1299,117 @@ app.delete("/api/sites/:id", requireAdmin, (req, res) => {
   res.json({ success: true, message: "Site deleted" });
 });
 
-// Admin Direct File Upload & Deployment for Dynamic Sub-Sites
+// Admin Multi-File & Project Upload & Deployment for Dynamic Sub-Sites
 app.post("/api/sites/upload-file", requireAdmin, (req, res) => {
-  const { slug, title, description, fileContent, fileName, fileSize } = req.body;
-  if (!slug) {
-    res.status(400).json({ error: "Slug is required" });
-    return;
+  try {
+    const { slug, title, description, files, fileContent, fileName, fileSize, entryFile, projectType } = req.body;
+    if (!slug) {
+      res.status(400).json({ error: "Slug is required" });
+      return;
+    }
+
+    // Ensure either files array or single fileContent is supplied
+    if ((!files || !Array.isArray(files) || files.length === 0) && !fileContent) {
+      res.status(400).json({ error: "At least one file or fileContent is required" });
+      return;
+    }
+
+    const cleanSlug = String(slug)
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9-_]/g, "");
+
+    const db = readDatabase();
+    const existingIdx = db.sites.findIndex((s) => s.slug.toLowerCase() === cleanSlug);
+
+    // Normalize files array
+    let normalizedFiles: any[] = [];
+    if (Array.isArray(files) && files.length > 0) {
+      normalizedFiles = files.map((f: any) => ({
+        name: String(f.name || "file.txt").trim(),
+        path: String(f.path || f.name || "file.txt").replace(/^\/+/, "").trim(),
+        content: f.content || "",
+        contentType: f.contentType || getMimeType(f.name || f.path),
+        size: typeof f.size === "number" ? f.size : (f.content ? f.content.length : 0),
+        isBinary: Boolean(f.isBinary),
+      }));
+    } else if (fileContent) {
+      const singleName = fileName || "index.html";
+      normalizedFiles = [
+        {
+          name: singleName,
+          path: singleName,
+          content: fileContent,
+          contentType: getMimeType(singleName),
+          size: fileSize || fileContent.length,
+          isBinary: false,
+        },
+      ];
+    }
+
+    // Determine entry file
+    let finalEntryFile = entryFile || "";
+    if (!finalEntryFile) {
+      const htmlFile = normalizedFiles.find((f) =>
+        f.name.toLowerCase() === "index.html" || f.path.toLowerCase() === "index.html"
+      );
+      if (htmlFile) {
+        finalEntryFile = htmlFile.path;
+      } else {
+        const readmeFile = normalizedFiles.find((f) =>
+          f.name.toLowerCase() === "readme.md" || f.path.toLowerCase() === "readme.md"
+        );
+        if (readmeFile) {
+          finalEntryFile = readmeFile.path;
+        } else {
+          finalEntryFile = normalizedFiles[0]?.path || "index.html";
+        }
+      }
+    }
+
+    const finalProjectType = projectType || detectProjectType(normalizedFiles);
+    const totalSize = normalizedFiles.reduce((sum, f) => sum + (f.size || 0), 0);
+
+    // Extract html & css for backward-compatible standalone rendering
+    const entryHtmlObj = normalizedFiles.find((f) => f.path.toLowerCase() === finalEntryFile.toLowerCase());
+    const indexHtmlObj = normalizedFiles.find((f) => f.name.toLowerCase() === "index.html");
+    const styleCssObj = normalizedFiles.find((f) => f.name.toLowerCase() === "style.css");
+
+    const customHtml = entryHtmlObj ? entryHtmlObj.content : (indexHtmlObj ? indexHtmlObj.content : (fileContent || ""));
+    const customCss = styleCssObj ? styleCssObj.content : "";
+
+    const siteData = {
+      id: existingIdx !== -1 ? db.sites[existingIdx].id : `site-${Date.now()}`,
+      slug: cleanSlug,
+      title: String(title || (normalizedFiles.length === 1 ? normalizedFiles[0].name : cleanSlug)).trim(),
+      description: description
+        ? String(description).trim()
+        : `Deployed ${normalizedFiles.length} file(s) • ${finalProjectType.toUpperCase()}`,
+      customHtml,
+      customCss,
+      files: normalizedFiles,
+      entryFile: finalEntryFile,
+      projectType: finalProjectType,
+      fileName: finalEntryFile,
+      fileSize: totalSize,
+      author: "skedz5023",
+      createdAt: existingIdx !== -1 ? db.sites[existingIdx].createdAt : new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (existingIdx !== -1) {
+      db.sites[existingIdx] = siteData;
+    } else {
+      db.sites.push(siteData);
+    }
+
+    writeDatabase(db);
+    broadcastUpdate("sites_updated", db.sites);
+    res.json({ success: true, site: siteData });
+  } catch (err: any) {
+    console.error("Error in POST /api/sites/upload-file:", err);
+    res.status(500).json({ error: err.message || "Failed to deploy site files on server" });
   }
-  if (!fileContent) {
-    res.status(400).json({ error: "File content is required" });
-    return;
-  }
-
-  const cleanSlug = String(slug)
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9-_]/g, "");
-
-  const db = readDatabase();
-  const existingIdx = db.sites.findIndex((s) => s.slug.toLowerCase() === cleanSlug);
-
-  const siteData = {
-    id: existingIdx !== -1 ? db.sites[existingIdx].id : `site-${Date.now()}`,
-    slug: cleanSlug,
-    title: String(title || fileName || cleanSlug).trim(),
-    description: description ? String(description).trim() : `Uploaded file: ${fileName || "site.html"}`,
-    customHtml: fileContent,
-    fileName: fileName || "index.html",
-    fileSize: fileSize || fileContent.length,
-    author: "skedz5023",
-    createdAt: existingIdx !== -1 ? db.sites[existingIdx].createdAt : new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
-
-  if (existingIdx !== -1) {
-    db.sites[existingIdx] = siteData;
-  } else {
-    db.sites.push(siteData);
-  }
-
-  writeDatabase(db);
-  broadcastUpdate("sites_updated", db.sites);
-  res.json({ success: true, site: siteData });
 });
 
 // Admin Save/Update Firebase Configuration
@@ -1258,32 +1495,64 @@ app.delete("/api/inquiries/:id", requireAdmin, (req, res) => {
   res.json({ success: true });
 });
 
-// --- DYNAMIC SITE DIRECT RENDER ROUTE ---
-// If someone visits /newsite directly, or /site/newsite, render HTML or let SPA handle it
-app.get("/raw-site/:slug", (req, res) => {
+// --- DYNAMIC SITE DIRECT RENDER & ASSET ROUTES ---
+app.all("/raw-site/:slug", (req, res) => {
   const db = readDatabase();
   const site = db.sites.find((s) => s.slug.toLowerCase() === req.params.slug.toLowerCase());
   if (!site) {
     res.status(404).send("<h1>Site Not Found</h1><p>The requested sub-site does not exist.</p>");
     return;
   }
+  handleSiteRequest(req, res, site, "/");
+});
 
-  if (site.customHtml) {
-    let fullHtml = site.customHtml;
-    if (site.customCss) {
-      fullHtml = fullHtml.replace("</head>", `<style>${site.customCss}</style></head>`);
+app.all("/raw-site/:slug/*", (req, res) => {
+  const db = readDatabase();
+  const site = db.sites.find((s) => s.slug.toLowerCase() === req.params.slug.toLowerCase());
+  if (!site) {
+    res.status(404).send("<h1>Site Not Found</h1><p>The requested sub-site does not exist.</p>");
+    return;
+  }
+  const wildcardPath = "/" + ((req.params as any)[0] || (req.params as any)["0"] || "");
+  handleSiteRequest(req, res, site, wildcardPath);
+});
+
+// Download full project as ZIP archive
+app.get("/api/sites/:slug/download", async (req, res) => {
+  const db = readDatabase();
+  const site = db.sites.find((s) => s.slug.toLowerCase() === req.params.slug.toLowerCase());
+  if (!site) {
+    res.status(404).json({ error: "Site not found" });
+    return;
+  }
+
+  try {
+    const zip = new JSZip();
+    if (site.files && site.files.length > 0) {
+      for (const f of site.files) {
+        if (f.isBinary) {
+          zip.file(f.path || f.name, f.content, { base64: true });
+        } else {
+          zip.file(f.path || f.name, f.content);
+        }
+      }
+    } else if (site.customHtml) {
+      zip.file("index.html", site.customHtml);
+      if (site.customCss) {
+        zip.file("style.css", site.customCss);
+      }
+    } else {
+      zip.file("README.md", `# ${site.title}\n\n${site.description || ""}`);
     }
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.send(fullHtml);
-    return;
-  }
 
-  if (site.externalUrl) {
-    res.redirect(site.externalUrl);
-    return;
+    const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="${site.slug}-project.zip"`);
+    res.send(zipBuffer);
+  } catch (err: any) {
+    console.error("Failed to generate zip for site:", err);
+    res.status(500).json({ error: "Failed to generate ZIP archive" });
   }
-
-  res.send(`<h1>${site.title}</h1><p>${site.description}</p>`);
 });
 
 // JSON 404 for unhandled API endpoints so clients never receive an HTML error page
@@ -1294,7 +1563,15 @@ app.all("/api/*", (_req, res) => {
 // Express global error handler ensuring JSON responses for all /api requests
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   console.error("Global Server Error:", err);
-  if (req.path.startsWith("/api")) {
+  if (err instanceof SyntaxError && "body" in err) {
+    res.status(400).json({ error: "Invalid JSON format in request body" });
+    return;
+  }
+  if (err.type === "entity.too.large") {
+    res.status(413).json({ error: "Payload too large. Max file upload size is 50MB." });
+    return;
+  }
+  if (req.path.startsWith("/api") || req.originalUrl.startsWith("/api")) {
     res.status(err.status || err.statusCode || 500).json({
       error: err.message || "An unexpected server error occurred",
     });

@@ -1,5 +1,8 @@
 import { useState, useEffect } from "react";
 import { getSiteSubdomainUrl } from "../../lib/domain";
+import { safeFetchJson } from "../../lib/apiHelper";
+import ProjectFileDeployModal from "./ProjectFileDeployModal";
+import SiteFilesInspectorModal from "./SiteFilesInspectorModal";
 import {
   ProjectCard,
   SocialLink,
@@ -103,6 +106,10 @@ export default function AdminDashboard({ onExitAdmin }: AdminDashboardProps) {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [manualImageUrl, setManualImageUrl] = useState("");
   const [adminLightbox, setAdminLightbox] = useState<string | null>(null);
+
+  // Multi-File Project Deploy & Inspect Modals
+  const [multiDeployModalOpen, setMultiDeployModalOpen] = useState(false);
+  const [inspectingSite, setInspectingSite] = useState<DynamicSite | null>(null);
 
   // Site modal/form (Direct file upload)
   const [siteModalOpen, setSiteModalOpen] = useState(false);
@@ -620,7 +627,7 @@ export default function AdminDashboard({ onExitAdmin }: AdminDashboardProps) {
       // If user chose to deploy a new site directly with this card
       if (cardLinkMode === "new_deploy" && cardDeployFile && cardDeploySlug) {
         const cleanSlug = cardDeploySlug.toLowerCase().trim().replace(/[^a-z0-9-_]/g, "");
-        const deployRes = await fetch("/api/sites/upload-file", {
+        const deployResp = await safeFetchJson<{ success: boolean; site: DynamicSite }>("/api/sites/upload-file", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -636,9 +643,26 @@ export default function AdminDashboard({ onExitAdmin }: AdminDashboardProps) {
           }),
         });
 
-        if (!deployRes.ok) {
-          const deployErr = await deployRes.json();
-          throw new Error(`Sub-site deployment failed: ${deployErr.error || "Unknown error"}`);
+        if (deployResp.ok && deployResp.data?.site) {
+          const newDeployedSite = deployResp.data.site;
+          setSites((prev) => [newDeployedSite, ...prev.filter((s) => s.slug !== cleanSlug)]);
+        } else {
+          console.warn("Server card deploy failed, fallback to local storage:", deployResp.error);
+          const localSite: DynamicSite = {
+            id: `site-${Date.now()}`,
+            slug: cleanSlug,
+            title: editingCard.title,
+            description: editingCard.subtitle || `Deployed alongside ${editingCard.title}`,
+            customHtml: cardDeployFile.name.endsWith(".html") ? cardDeployFile.content : `<pre>${cardDeployFile.content}</pre>`,
+            fileName: cardDeployFile.name,
+            fileSize: cardDeployFile.size,
+            author: "Admin",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          const updatedSites = [localSite, ...sites.filter((s) => s.slug !== cleanSlug)];
+          setSites(updatedSites);
+          saveOfflineData({ sites: updatedSites });
         }
 
         finalLinkUrl = `/${cleanSlug}`;
@@ -788,9 +812,10 @@ export default function AdminDashboard({ onExitAdmin }: AdminDashboardProps) {
 
     try {
       const cleanSlug = siteSlug.toLowerCase().trim().replace(/[^a-z0-9-_]/g, "");
+      let deployedLive = false;
 
       if (siteUploadMode === "file" && siteFile) {
-        const res = await fetch("/api/sites/upload-file", {
+        const resp = await safeFetchJson<{ success: boolean; site: DynamicSite }>("/api/sites/upload-file", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -806,10 +831,30 @@ export default function AdminDashboard({ onExitAdmin }: AdminDashboardProps) {
           }),
         });
 
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Failed to deploy site file");
+        if (resp.ok && resp.data?.site) {
+          deployedLive = true;
+          const newSite = resp.data.site;
+          setSites((prev) => [newSite, ...prev.filter((s) => s.slug !== cleanSlug)]);
+        } else {
+          console.warn("Backend server deployment returned error, using local offline fallback:", resp.error);
+          const localSite: DynamicSite = {
+            id: `site-${Date.now()}`,
+            slug: cleanSlug,
+            title: siteTitle || siteFile.name,
+            description: siteDescription || `Directly uploaded: ${siteFile.name}`,
+            customHtml: siteFile.name.endsWith(".html") ? siteFile.content : `<pre>${siteFile.content}</pre>`,
+            fileName: siteFile.name,
+            fileSize: siteFile.size,
+            author: "Admin",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          const updatedSites = [localSite, ...sites.filter((s) => s.slug !== cleanSlug)];
+          setSites(updatedSites);
+          saveOfflineData({ sites: updatedSites });
+        }
       } else {
-        const res = await fetch("/api/sites", {
+        const resp = await safeFetchJson<{ success: boolean; site: DynamicSite }>("/api/sites", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -823,11 +868,29 @@ export default function AdminDashboard({ onExitAdmin }: AdminDashboardProps) {
           }),
         });
 
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Failed to save site route");
+        if (resp.ok && resp.data?.site) {
+          deployedLive = true;
+          const newSite = resp.data.site;
+          setSites((prev) => [newSite, ...prev.filter((s) => s.slug !== cleanSlug)]);
+        } else {
+          console.warn("Backend server route returned error, using local offline fallback:", resp.error);
+          const localSite: DynamicSite = {
+            id: `site-${Date.now()}`,
+            slug: cleanSlug,
+            title: siteTitle || cleanSlug,
+            description: siteDescription || "",
+            externalUrl: siteExternalUrl,
+            author: "Admin",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          const updatedSites = [localSite, ...sites.filter((s) => s.slug !== cleanSlug)];
+          setSites(updatedSites);
+          saveOfflineData({ sites: updatedSites });
+        }
       }
 
-      showToast(`Site deployed! Resolves at /${cleanSlug}`);
+      showToast(deployedLive ? `Site deployed! Resolves at /${cleanSlug}` : `Site saved locally at /${cleanSlug}`);
       setSiteModalOpen(false);
       setSiteFile(null);
       setSiteSlug("");
@@ -836,22 +899,27 @@ export default function AdminDashboard({ onExitAdmin }: AdminDashboardProps) {
       setSiteExternalUrl("");
       fetchAdminData();
     } catch (err: any) {
-      alert(err.message);
+      console.error("Save site error:", err);
+      showToast(err.message || "Failed to save site");
     }
   };
 
   const handleDeleteSite = async (id: string) => {
     if (!confirm("Are you sure you want to remove this deployed site?")) return;
     try {
-      const res = await fetch(`/api/sites/${id}`, {
+      const resp = await safeFetchJson(`/api/sites/${id}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok) throw new Error("Delete failed");
+      // Always remove locally so UI is immediately responsive
+      const updated = sites.filter((s) => s.id !== id);
+      setSites(updated);
+      saveOfflineData({ sites: updated });
       showToast("Dynamic site removed.");
-      fetchAdminData();
+      if (resp.ok) fetchAdminData();
     } catch (err: any) {
-      alert(err.message);
+      console.error("Delete site error:", err);
+      showToast(err.message || "Failed to delete site");
     }
   };
 
@@ -1399,31 +1467,48 @@ export default function AdminDashboard({ onExitAdmin }: AdminDashboardProps) {
           </div>
         )}
 
-        {/* ================= TAB 2: DEPLOY SUB-SITES (FILE UPLOAD) ================= */}
+        {/* ================= TAB 2: DEPLOY SUB-SITES (MULTI-FILE & FULLSTACK) ================= */}
         {activeTab === "sites" && (
           <div className="space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
-                <h2 className="text-xl font-bold text-white">Upload & Deploy Dynamic Sub-Sites</h2>
+                <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                  <span>Multi-File & Fullstack Dynamic Sites</span>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-cyan-950 text-cyan-300 border border-cyan-500/40">
+                    ZIP & Folder Ready
+                  </span>
+                </h2>
                 <p className="text-xs text-slate-400">
-                  Upload your pre-coded HTML/web files to host them instantly on custom subdomains like <span className="font-mono text-cyan-300">slug.skedz.vercel.app</span> or path <span className="font-mono text-cyan-300">/slug</span>.
+                  Deploy complete multi-file web apps, JSON endpoints, Markdown docs, or code projects live on custom subdomains like{" "}
+                  <span className="font-mono text-cyan-300">slug.skedz.vercel.app</span> or path{" "}
+                  <span className="font-mono text-cyan-300">/slug</span>.
                 </p>
               </div>
-              <button
-                onClick={() => {
-                  setSiteSlug("");
-                  setSiteTitle("");
-                  setSiteDescription("");
-                  setSiteFile(null);
-                  setSiteExternalUrl("");
-                  setSiteUploadMode("file");
-                  setSiteModalOpen(true);
-                }}
-                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold shadow-lg transition"
-              >
-                <Upload className="w-4 h-4" />
-                Upload New Site File
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setMultiDeployModalOpen(true)}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-semibold shadow-lg shadow-purple-600/30 transition"
+                >
+                  <Upload className="w-4 h-4" />
+                  Deploy Multi-File / Fullstack
+                </button>
+                <button
+                  onClick={() => {
+                    setSiteSlug("");
+                    setSiteTitle("");
+                    setSiteDescription("");
+                    setSiteFile(null);
+                    setSiteExternalUrl("");
+                    setSiteUploadMode("file");
+                    setSiteModalOpen(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-medium transition"
+                  title="Upload single file or URL"
+                >
+                  <FileCode className="w-3.5 h-3.5" />
+                  <span>Single File / URL</span>
+                </button>
+              </div>
             </div>
 
             {sites.length === 0 ? (
@@ -1431,71 +1516,115 @@ export default function AdminDashboard({ onExitAdmin }: AdminDashboardProps) {
                 <FileCode className="w-8 h-8 text-purple-400 mx-auto mb-2" />
                 <p className="text-slate-300 text-sm font-semibold">No dynamic sub-sites deployed yet</p>
                 <p className="text-slate-400 text-xs mt-1">
-                  Upload your HTML file using the button above to launch your first standalone page.
+                  Click &quot;Deploy Multi-File / Fullstack&quot; above to launch HTML, JS, JSON, or ZIP packages.
                 </p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {sites.map((site) => (
-                  <div
-                    key={site.id}
-                    className="p-6 rounded-3xl bg-[#090d1a] border border-purple-500/20 flex flex-col justify-between"
-                  >
-                    <div>
-                      <div className="flex items-center justify-between mb-3">
-                        <span className="px-3 py-1 rounded-full text-xs font-mono font-bold bg-cyan-950/60 text-cyan-300 border border-cyan-500/30">
-                          /{site.slug}
-                        </span>
-                        <span className="text-[10px] text-slate-500 font-mono">
-                          {new Date(site.createdAt).toLocaleDateString()}
-                        </span>
+                {sites.map((site) => {
+                  const fileCount = site.files?.length || 1;
+                  const projType = site.projectType || (fileCount > 1 ? "fullstack" : "web");
+                  const totalKb = site.fileSize
+                    ? (site.fileSize / 1024).toFixed(1)
+                    : site.files
+                    ? (site.files.reduce((a, f) => a + (f.size || f.content?.length || 0), 0) / 1024).toFixed(1)
+                    : "0.0";
+
+                  return (
+                    <div
+                      key={site.id}
+                      className="p-6 rounded-3xl bg-[#090d1a] border border-purple-500/20 flex flex-col justify-between hover:border-purple-500/40 transition"
+                    >
+                      <div>
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2">
+                            <span className="px-3 py-1 rounded-full text-xs font-mono font-bold bg-cyan-950/60 text-cyan-300 border border-cyan-500/30">
+                              /{site.slug}
+                            </span>
+                            <span className="px-2 py-0.5 rounded-md text-[9px] font-mono font-bold bg-purple-950 text-purple-300 border border-purple-500/30 uppercase">
+                              {projType}
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-slate-500 font-mono">
+                            {new Date(site.createdAt).toLocaleDateString()}
+                          </span>
+                        </div>
+
+                        <h3 className="text-base font-bold text-white mb-1">{site.title}</h3>
+                        <p className="text-xs text-slate-400 mb-4 font-light line-clamp-2">{site.description}</p>
+
+                        <div className="p-3 rounded-xl bg-black/40 border border-white/5 font-mono text-[11px] text-slate-400 space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span>Subdomain:</span>
+                            <span className="text-cyan-300 font-bold">{site.slug}.skedz.vercel.app</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span>Files Deployed:</span>
+                            <span className="text-purple-300 font-semibold">{fileCount} file(s) ({totalKb} KB)</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span>Entrypoint:</span>
+                            <span className="text-slate-300 truncate max-w-[150px]">{site.entryFile || site.fileName || "index.html"}</span>
+                          </div>
+                        </div>
                       </div>
 
-                      <h3 className="text-base font-bold text-white mb-1">{site.title}</h3>
-                      <p className="text-xs text-slate-400 mb-4 font-light">{site.description}</p>
+                      <div className="mt-6 pt-4 border-t border-white/5 space-y-3">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => setInspectingSite(site)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-mono text-slate-200 transition"
+                              title="Inspect Project Files & Code"
+                            >
+                              <Layers className="w-3.5 h-3.5 text-cyan-400" />
+                              <span>Inspect Files ({fileCount})</span>
+                            </button>
 
-                      <div className="p-3 rounded-xl bg-black/40 border border-white/5 font-mono text-[11px] text-slate-400 space-y-1">
-                        <div>Subdomain: <span className="text-cyan-300 font-bold">{site.slug}.skedz.vercel.app</span></div>
-                        <div>Path Route: <span className="text-purple-300">/{site.slug}</span></div>
-                        <div>File: {site.fileName || "Uploaded HTML Code"}</div>
-                        {site.fileSize && <div>Size: {(site.fileSize / 1024).toFixed(1)} KB</div>}
+                            <a
+                              href={`/api/sites/${site.slug}/download`}
+                              className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-purple-300 transition"
+                              title="Download Full Project ZIP"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                            </a>
+                          </div>
+
+                          <button
+                            onClick={() => handleDeleteSite(site.id)}
+                            className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/25 text-rose-400 transition"
+                            title="Delete Site"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        <div className="flex items-center gap-3 pt-1 text-xs font-mono">
+                          <a
+                            href={getSiteSubdomainUrl(site.slug)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1.5 text-cyan-300 hover:text-white transition"
+                            title="Open Subdomain URL"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            <span>{site.slug}.skedz.vercel.app</span>
+                          </a>
+                          <span className="text-slate-600">|</span>
+                          <a
+                            href={`/${site.slug}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-purple-300 hover:text-white transition"
+                            title="Open Path URL"
+                          >
+                            <span>/{site.slug}</span>
+                          </a>
+                        </div>
                       </div>
                     </div>
-
-                    <div className="mt-6 pt-4 border-t border-white/5 flex items-center justify-between gap-2 flex-wrap">
-                      <div className="flex items-center gap-3">
-                        <a
-                          href={getSiteSubdomainUrl(site.slug)}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1.5 text-xs text-cyan-300 hover:text-white font-mono font-semibold transition"
-                          title="Open Subdomain URL"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5" />
-                          {site.slug}.skedz.vercel.app
-                        </a>
-                        <span className="text-slate-600">|</span>
-                        <a
-                          href={`/${site.slug}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1 text-xs text-purple-300 hover:text-white font-mono transition"
-                          title="Open Path URL"
-                        >
-                          /{site.slug}
-                        </a>
-                      </div>
-
-                      <button
-                        onClick={() => handleDeleteSite(site.id)}
-                        className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/25 text-rose-400 transition"
-                        title="Delete Site"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -2816,6 +2945,35 @@ export default function AdminDashboard({ onExitAdmin }: AdminDashboardProps) {
             </form>
           </div>
         </div>
+      )}
+
+      {/* ================= MODAL: MULTI-FILE FULLSTACK DEPLOY ================= */}
+      <ProjectFileDeployModal
+        isOpen={multiDeployModalOpen}
+        onClose={() => setMultiDeployModalOpen(false)}
+        onSuccess={(newSite) => {
+          setSites((prev) => {
+            const exists = prev.some((s) => s.id === newSite.id || s.slug === newSite.slug);
+            if (exists) {
+              return prev.map((s) => (s.id === newSite.id || s.slug === newSite.slug ? newSite : s));
+            }
+            return [newSite, ...prev];
+          });
+        }}
+        token={token}
+        showToast={showToast}
+        saveOfflineData={saveOfflineData}
+        existingSites={sites}
+      />
+
+      {/* ================= MODAL: SITE FILES & CODE INSPECTOR ================= */}
+      {inspectingSite && (
+        <SiteFilesInspectorModal
+          isOpen={Boolean(inspectingSite)}
+          onClose={() => setInspectingSite(null)}
+          site={inspectingSite}
+          showToast={showToast}
+        />
       )}
 
       {/* ================= FULLSCREEN LIGHTBOX PREVIEW ================= */}

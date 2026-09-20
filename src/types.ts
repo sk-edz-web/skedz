@@ -30,6 +30,15 @@ export interface SocialLink {
   order: number;
 }
 
+export interface SiteFile {
+  name: string; // e.g. "index.html", "style.css", "data.json", "README.md"
+  path: string; // relative path e.g. "index.html", "css/style.css", "api/data.json"
+  content: string; // text or base64
+  contentType?: string; // MIME type e.g. "text/html", "application/json"
+  size?: number;
+  isBinary?: boolean;
+}
+
 export interface DynamicSite {
   id: string;
   slug: string; // e.g. 'newsite'
@@ -40,9 +49,12 @@ export interface DynamicSite {
   externalUrl?: string;
   fileName?: string;
   fileSize?: number;
-  author: string;
+  files?: SiteFile[]; // Multi-file fullstack bundle support
+  entryFile?: string; // e.g. "index.html" or "README.md"
+  projectType?: 'web' | 'fullstack' | 'markdown' | 'json' | 'code' | 'other';
+  author?: string;
   createdAt: string;
-  updatedAt: string;
+  updatedAt?: string;
 }
 
 export interface SecurityAuditLog {
